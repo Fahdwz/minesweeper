@@ -981,41 +981,75 @@
   }
 
   // ─── NFC Read ─────────────────────────────────────────────
+  let abortController = null;
+
   async function startScan() {
     if (!('NDEFReader' in window)) {
       showNotif('Web NFC not supported. Use Chrome on Android.', 'error');
       return;
     }
-    try {
-      nfcReader = new NDEFReader();
-      await nfcReader.scan();
 
-      setScanState('scanning', 'SCANNING...', 'Hold an NFC tag close to the back of your device.');
+    // Stop any existing scan first
+    if (abortController) { abortController.abort(); abortController = null; }
+
+    try {
+      abortController = new AbortController();
+      nfcReader = new NDEFReader();
+
+      // Set handlers AFTER scan() resolves — this is the correct pattern
+      await nfcReader.scan({ signal: abortController.signal });
+
+      setScanState('scanning', 'SCANNING...', 'Hold an NFC tag flat against the back of your phone and keep it still.');
       document.getElementById('scanBtn').style.display = 'none';
       document.getElementById('stopScanBtn').style.display = 'inline-flex';
 
-      nfcReader.addEventListener('reading', ({ message, serialNumber }) => {
-        stopScan();
+      nfcReader.onreading = ({ message, serialNumber }) => {
         const records = message.records || [];
-        let dataStr = '';
         let recSummary = `${records.length} record${records.length !== 1 ? 's' : ''}`;
+        let recType = 'empty';
+        const allData = [];
 
-        if (records.length > 0) {
-          const r = records[0];
-          if (r.recordType === 'url' || r.recordType === 'text') {
-            const decoder = new TextDecoder();
-            try {
-              dataStr = decoder.decode(r.data);
-            } catch(e) { dataStr = '[binary]'; }
-          } else {
-            dataStr = `[${r.recordType}]`;
+        for (const r of records) {
+          recType = r.recordType;
+          try {
+            if (r.recordType === 'url' || r.recordType === 'absolute-url') {
+              allData.push(new TextDecoder().decode(r.data));
+            } else if (r.recordType === 'text') {
+              // text records: first byte = status (lang length in lower 6 bits)
+              const statusByte = r.data.getUint8(0);
+              const langLen = statusByte & 0x3f;
+              const encoding = (statusByte & 0x80) ? 'utf-16' : 'utf-8';
+              allData.push(new TextDecoder(encoding).decode(r.data.slice(1 + langLen)));
+            } else if (r.recordType === 'mime') {
+              allData.push(`[${r.mediaType}]`);
+            } else if (r.recordType === 'smart-poster') {
+              // smart poster contains nested records
+              try {
+                for (const nested of r.toRecords()) {
+                  if (nested.recordType === 'url' || nested.recordType === 'text') {
+                    allData.push(new TextDecoder().decode(nested.data));
+                  }
+                }
+              } catch { allData.push('[Smart Poster]'); }
+            } else if (r.recordType === 'unknown' || r.recordType === '') {
+              allData.push('[Unknown record type]');
+            } else {
+              try {
+                const raw = new TextDecoder().decode(r.data);
+                allData.push(raw || `[${r.recordType}]`);
+              } catch { allData.push(`[${r.recordType}]`); }
+            }
+          } catch(e) {
+            allData.push(`[${r.recordType}]`);
           }
         }
 
+        const dataStr = allData.join(' | ') || '(empty tag — no NDEF records)';
+
         scannedTag = {
           id: serialNumber || generateId(),
-          type: 'Unknown (from scan)',
-          recordType: records.length > 0 ? records[0].recordType : 'empty',
+          type: 'NDEF Tag',
+          recordType: recType,
           records: recSummary,
           data: dataStr
         };
@@ -1023,32 +1057,44 @@
         document.getElementById('resultId').textContent = scannedTag.id;
         document.getElementById('resultType').textContent = scannedTag.type;
         document.getElementById('resultRecords').textContent = scannedTag.records;
-        document.getElementById('resultData').textContent = scannedTag.data || '(empty)';
+        document.getElementById('resultData').textContent = scannedTag.data;
         document.getElementById('tagResult').classList.add('visible');
 
         setScanState('success', 'TAG DETECTED!', 'Tag read successfully. Save it to your library.');
-        showNotif('✓ NFC tag read successfully!', 'success');
-      });
-
-      nfcReader.addEventListener('readingerror', () => {
-        setScanState('error', 'READ ERROR', 'Could not read this tag. Try again.');
         resetScanUI();
-        showNotif('Failed to read NFC tag.', 'error');
-      });
+        showNotif('✓ NFC tag read!', 'success');
+      };
+
+      nfcReader.onreadingerror = () => {
+        // This fires for non-NDEF tags (access cards, transport cards, etc.)
+        setScanState('error', 'NOT AN NDEF TAG', 'This card cannot be read by a browser. Only NFC stickers/tags with NDEF data work. Access cards and transport cards are not supported.');
+        document.getElementById('tagResult').classList.remove('visible');
+        resetScanUI();
+        showNotif('This card type cannot be read in browser.', 'warn');
+      };
 
     } catch (err) {
-      setScanState('error', 'PERMISSION DENIED', err.message || 'NFC permission was denied.');
+      const msg = err.message || String(err);
+      if (err.name === 'AbortError') return; // user cancelled, ignore
+      if (msg.toLowerCase().includes('permission')) {
+        setScanState('error', 'PERMISSION DENIED', 'Open Chrome site settings for this page and allow NFC.');
+        showNotif('NFC permission denied.', 'error');
+      } else if (msg.toLowerCase().includes('not supported') || msg.toLowerCase().includes('no nfc')) {
+        setScanState('error', 'NOT SUPPORTED', 'Web NFC only works in Chrome on Android.');
+        showNotif('NFC not supported.', 'error');
+      } else {
+        setScanState('error', 'ERROR', msg);
+        showNotif('Error: ' + msg, 'error');
+      }
       resetScanUI();
-      showNotif('NFC permission denied.', 'error');
     }
   }
 
   function stopScan() {
+    if (abortController) { abortController.abort(); abortController = null; }
     nfcReader = null;
     resetScanUI();
-    if (document.getElementById('scanStatusTitle').textContent === 'SCANNING...') {
-      setScanState('', 'READY TO SCAN', 'Tap the button below, then hold an NFC tag near your device.');
-    }
+    setScanState('', 'READY TO SCAN', 'Tap the button below, then hold an NFC tag near your device.');
   }
 
   function resetScanUI() {
