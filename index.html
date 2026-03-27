@@ -70,6 +70,7 @@
         .n2 { color: #388e3c; }
         .n3 { color: #d32f2f; }
         .n4 { color: #7b1fa2; }
+        
         #overlay {
             display: none;
             position: fixed;
@@ -97,7 +98,9 @@
             border-radius: 50px;
             cursor: pointer;
             box-shadow: 0 5px 0 #3a5e23;
+            transition: transform 0.1s;
         }
+        .btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #3a5e23; }
         .hint {
             color: rgba(255,255,255,0.65);
             font-size: 2.4vmin;
@@ -116,236 +119,124 @@
     </div>
     <div id="grid"></div>
     <button class="btn" style="margin-top:3vh;" onclick="initGame()">Restart</button>
-    <div class="hint">Desktop: left-click reveal · right-click flag<br>Mobile: tap reveal · long-press flag</div>
+    <div class="hint">Desktop: Left-click reveal · Right-click flag<br>Mobile: Tap reveal · Long-press flag</div>
 </div>
 
 <div id="overlay">
     <div class="popup">
-        <h2 id="pop-title">You Won!</h2>
-        <p id="pop-desc">Time: 0 seconds</p>
+        <h2 id="pop-title" style="color:#4a752c; margin-top:0;">You Won!</h2>
+        <p id="pop-desc" style="color:#555; margin-bottom:3vh;">Time: 0 seconds</p>
         <button class="btn" onclick="initGame()">Play Again</button>
     </div>
 </div>
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   AUDIO ENGINE
-   - ONE AudioContext for the entire page lifetime
-   - Unlocked immediately on first user gesture
-   - All sounds are procedurally synthesised, layered, warm
+   LOUD & CLEAR AUDIO ENGINE
 ═══════════════════════════════════════════════════════════════ */
 let AC = null;
-
 function getAC() {
-    if (!AC) {
-        AC = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (AC.state === 'suspended') {
-        AC.resume();
-    }
+    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+    if (AC.state === 'suspended') AC.resume();
     return AC;
 }
 
-// Pre-unlock on any touch / click so the context is live before we need it
-document.addEventListener('touchstart', () => getAC(), { passive: true });
-document.addEventListener('mousedown',  () => getAC(), { passive: true });
-
-// Persistent master compressor (prevents clipping, glues layers)
-let _comp = null;
+// Global master gain to prevent distortion but keep it loud
+let _master = null;
 function master() {
-    if (_comp) return _comp;
+    if (_master) return _master;
     const ac = getAC();
-    _comp = ac.createDynamicsCompressor();
-    _comp.threshold.value = -10;
-    _comp.knee.value      =  8;
-    _comp.ratio.value     =  5;
-    _comp.attack.value    =  0.002;
-    _comp.release.value   =  0.15;
-    _comp.connect(ac.destination);
-    return _comp;
+    _master = ac.createGain();
+    _master.gain.value = 0.8; // High volume
+    _master.connect(ac.destination);
+    return _master;
 }
 
-/* Utility: noise buffer of given duration (seconds) */
 function makeNoiseBuf(dur) {
-    const ac  = getAC();
+    const ac = getAC();
     const len = Math.ceil(ac.sampleRate * dur);
     const buf = ac.createBuffer(1, len, ac.sampleRate);
-    const d   = buf.getChannelData(0);
+    const d = buf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     return buf;
 }
 
-/* Utility: distortion curve */
-function distCurve(amount) {
-    const n = 512, out = new Float32Array(n);
-    const k = amount;
-    for (let i = 0; i < n; i++) {
-        const x = (i * 2) / n - 1;
-        out[i] = ((Math.PI + k) * x) / (Math.PI + k * Math.abs(x));
-    }
-    return out;
+function sfxBtn() {
+    const ac = getAC(); const now = ac.currentTime;
+    const osc = ac.createOscillator(); const g = ac.createGain();
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(250, now);
+    osc.frequency.exponentialRampToValueAtTime(100, now + 0.04);
+    g.gain.setValueAtTime(0.3, now); // Boosted
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
+    osc.connect(g); g.connect(master());
+    osc.start(now); osc.stop(now + 0.05);
 }
 
-/* ──────────────────────────────────────────────────────────────
-   sfxReveal  — soft earthy "pat", like turning over garden soil
-────────────────────────────────────────────────────────────── */
-function sfxReveal() {
-    const ac  = getAC();
-    const now = ac.currentTime;
-
-    // 1. Short pitched thud (sine, pitch-drops fast)
-    const osc = ac.createOscillator();
-    const og  = ac.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(520, now);
-    osc.frequency.exponentialRampToValueAtTime(180, now + 0.07);
-    og.gain.setValueAtTime(0, now);
-    og.gain.linearRampToValueAtTime(0.20, now + 0.004);
-    og.gain.exponentialRampToValueAtTime(0.0001, now + 0.14);
-    osc.connect(og); og.connect(master());
-    osc.start(now); osc.stop(now + 0.16);
-
-    // 2. Band-passed noise burst (texture)
-    const ns  = ac.createBufferSource();
-    ns.buffer = makeNoiseBuf(0.08);
-    const bp  = ac.createBiquadFilter();
-    bp.type = 'bandpass'; bp.frequency.value = 900; bp.Q.value = 1.0;
-    const ng  = ac.createGain();
-    ng.gain.setValueAtTime(0.07, now);
-    ng.gain.exponentialRampToValueAtTime(0.0001, now + 0.07);
-    ns.connect(bp); bp.connect(ng); ng.connect(master());
-    ns.start(now); ns.stop(now + 0.09);
-}
-
-/* ──────────────────────────────────────────────────────────────
-   sfxFlag  — clear bell "ting", like a tiny garden wind-chime
-────────────────────────────────────────────────────────────── */
 function sfxFlag() {
-    const ac  = getAC();
-    const now = ac.currentTime;
-
-    // Harmonic series of a small bell: f, 2.76f, 5.4f (inharmonic like real metal)
-    const partials = [
-        { freq: 880,  amp: 0.14, decay: 0.55 },
-        { freq: 2427, amp: 0.07, decay: 0.30 },
-        { freq: 4752, amp: 0.04, decay: 0.18 },
-    ];
-    partials.forEach(({ freq, amp, decay }) => {
-        const o = ac.createOscillator();
-        const g = ac.createGain();
-        o.type = 'sine';
-        o.frequency.value = freq;
-        g.gain.setValueAtTime(0, now);
-        g.gain.linearRampToValueAtTime(amp, now + 0.003);
-        g.gain.exponentialRampToValueAtTime(0.0001, now + decay);
-        o.connect(g); g.connect(master());
-        o.start(now); o.stop(now + decay + 0.02);
-    });
+    const ac = getAC(); const now = ac.currentTime;
+    // Wooden Thump
+    const osc = ac.createOscillator(); const g = ac.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(300, now);
+    osc.frequency.exponentialRampToValueAtTime(50, now + 0.08);
+    g.gain.setValueAtTime(0.6, now); // Loud
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+    osc.connect(g); g.connect(master());
+    osc.start(now); osc.stop(now + 0.1);
 }
 
-/* ──────────────────────────────────────────────────────────────
-   sfxBoom  — deep dramatic explosion with sub + debris noise
-────────────────────────────────────────────────────────────── */
+function sfxReveal() {
+    const ac = getAC(); const now = ac.currentTime;
+    const osc = ac.createOscillator(); const g = ac.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(500, now);
+    osc.frequency.exponentialRampToValueAtTime(200, now + 0.08);
+    g.gain.setValueAtTime(0.2, now);
+    g.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
+    osc.connect(g); g.connect(master());
+    osc.start(now); osc.stop(now + 0.12);
+}
+
 function sfxBoom() {
-    const ac  = getAC();
-    const now = ac.currentTime;
-
-    // 1. Sub-bass thud
-    const sub  = ac.createOscillator();
-    const subg = ac.createGain();
+    const ac = getAC(); const now = ac.currentTime;
+    const sub = ac.createOscillator(); const subg = ac.createGain();
     sub.type = 'sine';
-    sub.frequency.setValueAtTime(90, now);
-    sub.frequency.exponentialRampToValueAtTime(22, now + 0.65);
-    subg.gain.setValueAtTime(0, now);
-    subg.gain.linearRampToValueAtTime(0.55, now + 0.008);
-    subg.gain.exponentialRampToValueAtTime(0.0001, now + 0.75);
+    sub.frequency.setValueAtTime(100, now);
+    sub.frequency.exponentialRampToValueAtTime(20, now + 0.5);
+    subg.gain.setValueAtTime(0.8, now);
+    subg.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
     sub.connect(subg); subg.connect(master());
-    sub.start(now); sub.stop(now + 0.8);
-
-    // 2. Mid crunch (distorted sawtooth)
-    const cr   = ac.createOscillator();
-    const crDist = ac.createWaveShaper();
-    const crg  = ac.createGain();
-    cr.type = 'sawtooth';
-    cr.frequency.setValueAtTime(140, now);
-    cr.frequency.exponentialRampToValueAtTime(35, now + 0.35);
-    crDist.curve = distCurve(120);
-    const crLp = ac.createBiquadFilter();
-    crLp.type = 'lowpass'; crLp.frequency.value = 600;
-    crg.gain.setValueAtTime(0, now);
-    crg.gain.linearRampToValueAtTime(0.18, now + 0.006);
-    crg.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
-    cr.connect(crDist); crDist.connect(crLp); crLp.connect(crg); crg.connect(master());
-    cr.start(now); cr.stop(now + 0.42);
-
-    // 3. Debris noise (low-passed white noise, fades over 400ms)
-    const nsb  = ac.createBufferSource();
-    nsb.buffer = makeNoiseBuf(0.45);
-    const nlp  = ac.createBiquadFilter();
-    nlp.type = 'lowpass'; nlp.frequency.value = 350;
-    const nsg  = ac.createGain();
-    nsg.gain.setValueAtTime(0.22, now);
-    nsg.gain.exponentialRampToValueAtTime(0.0001, now + 0.45);
-    nsb.connect(nlp); nlp.connect(nsg); nsg.connect(master());
-    nsb.start(now); nsb.stop(now + 0.48);
+    sub.start(now); sub.stop(now + 0.7);
 }
 
-/* ──────────────────────────────────────────────────────────────
-   sfxWin  — warm ascending major scale, each note a soft bell
-────────────────────────────────────────────────────────────── */
 function sfxWin() {
-    const ac  = getAC();
-    const now = ac.currentTime;
-    // C major scale, two octaves, staggered
-    const notes = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88,
-                   523.25, 587.33, 659.25, 698.46, 783.99, 880.00, 987.77, 1046.50];
-    notes.forEach((freq, i) => {
-        const t    = now + i * 0.085;
-        const amp  = 0.13 + (i / notes.length) * 0.04; // gentle swell
-
-        // Fundamental
-        const o = ac.createOscillator();
-        const g = ac.createGain();
-        o.type = 'sine';
-        o.frequency.value = freq;
+    const ac = getAC(); const now = ac.currentTime;
+    [523.25, 659.25, 783.99, 1046.50].forEach((f, i) => {
+        const t = now + i * 0.12;
+        const o = ac.createOscillator(); const g = ac.createGain();
+        o.type = 'sine'; o.frequency.value = f;
         g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(amp, t + 0.01);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+        g.gain.linearRampToValueAtTime(0.3, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
         o.connect(g); g.connect(master());
-        o.start(t); o.stop(t + 0.6);
-
-        // Octave shimmer
-        const sh = ac.createOscillator();
-        const sg = ac.createGain();
-        sh.type = 'sine';
-        sh.frequency.value = freq * 2;
-        sg.gain.setValueAtTime(0, t);
-        sg.gain.linearRampToValueAtTime(amp * 0.28, t + 0.01);
-        sg.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-        sh.connect(sg); sg.connect(master());
-        sh.start(t); sh.stop(t + 0.32);
+        o.start(t); o.stop(t + 0.5);
     });
 }
 
 /* ═══════════════════════════════════════════════════════════════
    GAME LOGIC
 ═══════════════════════════════════════════════════════════════ */
-const ROWS = 10, COLS = 10, TOTAL_MINES = 10;
-let board, gameOver, timer, timerInterval, firstClick;
-let longPressTimeout = null;
+const ROWS = 10, COLS = 10, MINES = 10;
+let board, gameOver, timer, timerInt, firstClick, longPress;
 
 function initGame() {
-    gameOver   = false;
-    timer      = 0;
-    firstClick = true;
-    clearInterval(timerInterval);
-    document.getElementById('timer').innerText      = '0';
-    document.getElementById('mine-count').innerText = TOTAL_MINES;
+    getAC(); sfxBtn();
+    gameOver = false; timer = 0; firstClick = true;
+    clearInterval(timerInt);
+    document.getElementById('timer').innerText = '0';
+    document.getElementById('mine-count').innerText = MINES;
     document.getElementById('overlay').style.display = 'none';
-
-    // Reset compressor so it's fresh
-    if (_comp) { try { _comp.disconnect(); } catch(e){} _comp = null; }
-
     board = [];
     const grid = document.getElementById('grid');
     grid.innerHTML = '';
@@ -356,80 +247,52 @@ function initGame() {
             board[r][c] = { isMine: false, revealed: false, flagged: false, count: 0 };
             const cell = document.createElement('div');
             cell.className = `cell ${(r + c) % 2 === 0 ? 'light' : 'dark'}`;
-            cell.dataset.r = r;
-            cell.dataset.c = c;
-            cell.addEventListener('click',       onCellClick);
-            cell.addEventListener('contextmenu', onCellRightClick);
-            cell.addEventListener('touchstart',  onTouchStart,  { passive: false });
-            cell.addEventListener('touchend',    onTouchEnd,    { passive: false });
-            cell.addEventListener('touchmove',   onTouchMove,   { passive: false });
-            cell.addEventListener('touchcancel', onTouchCancel, { passive: false });
+            cell.dataset.r = r; cell.dataset.c = c;
+            cell.addEventListener('click', (e) => handleReveal(+e.target.dataset.r, +e.target.dataset.c));
+            cell.addEventListener('contextmenu', (e) => { e.preventDefault(); toggleFlag(+e.target.dataset.r, +e.target.dataset.c); });
+            
+            // Mobile Swipe/LongPress logic
+            cell.addEventListener('touchstart', (e) => { 
+                e.preventDefault(); 
+                longPress = setTimeout(() => { longPress = null; toggleFlag(r, c); }, 400); 
+            });
+            cell.addEventListener('touchend', (e) => { 
+                if(longPress) { clearTimeout(longPress); longPress = null; handleReveal(r, c); } 
+            });
             grid.appendChild(cell);
         }
     }
 }
 
-function onCellClick(e) {
-    getAC();
-    handleReveal(+e.currentTarget.dataset.r, +e.currentTarget.dataset.c);
-}
-function onCellRightClick(e) {
-    e.preventDefault(); getAC();
-    toggleFlag(+e.currentTarget.dataset.r, +e.currentTarget.dataset.c);
-}
-function onTouchStart(e) {
-    e.preventDefault(); getAC();
-    const r = +e.currentTarget.dataset.r, c = +e.currentTarget.dataset.c;
-    longPressTimeout = setTimeout(() => { longPressTimeout = null; toggleFlag(r, c); }, 500);
-}
-function onTouchEnd(e) {
-    e.preventDefault();
-    if (longPressTimeout !== null) {
-        clearTimeout(longPressTimeout); longPressTimeout = null;
-        handleReveal(+e.currentTarget.dataset.r, +e.currentTarget.dataset.c);
-    }
-}
-function onTouchMove(e)   { e.preventDefault(); if (longPressTimeout) { clearTimeout(longPressTimeout); longPressTimeout = null; } }
-function onTouchCancel(e) { if (longPressTimeout) { clearTimeout(longPressTimeout); longPressTimeout = null; } }
-
-function plantMines(safeR, safeC) {
-    let placed = 0;
-    while (placed < TOTAL_MINES) {
-        const r = Math.floor(Math.random() * ROWS);
-        const c = Math.floor(Math.random() * COLS);
-        if (!board[r][c].isMine && !(Math.abs(r - safeR) <= 1 && Math.abs(c - safeC) <= 1)) {
-            board[r][c].isMine = true; placed++;
+function plantMines(sR, sC) {
+    let p = 0;
+    while (p < MINES) {
+        const r = Math.floor(Math.random() * ROWS), c = Math.floor(Math.random() * COLS);
+        if (!board[r][c].isMine && !(Math.abs(r - sR) <= 1 && Math.abs(c - sC) <= 1)) {
+            board[r][c].isMine = true; p++;
         }
     }
     for (let r = 0; r < ROWS; r++)
         for (let c = 0; c < COLS; c++) {
             if (board[r][c].isMine) continue;
-            let count = 0;
+            let n = 0;
             for (let dr = -1; dr <= 1; dr++)
                 for (let dc = -1; dc <= 1; dc++)
-                    if (board[r+dr]?.[c+dc]?.isMine) count++;
-            board[r][c].count = count;
+                    if (board[r+dr]?.[c+dc]?.isMine) n++;
+            board[r][c].count = n;
         }
 }
 
 function handleReveal(r, c) {
     if (gameOver || board[r][c].flagged || board[r][c].revealed) return;
-    if (firstClick) {
-        plantMines(r, c); firstClick = false;
-        timerInterval = setInterval(() => {
-            timer++;
-            document.getElementById('timer').innerText = timer;
-        }, 1000);
-    }
+    if (firstClick) { plantMines(r, c); firstClick = false; timerInt = setInterval(() => { timer++; document.getElementById('timer').innerText = timer; }, 1000); }
+    
     board[r][c].revealed = true;
     const el = document.getElementById('grid').children[r * COLS + c];
     el.classList.add('revealed');
-    if (board[r][c].isMine) {
-        el.innerText = '💣';
-        sfxBoom();
-        endGame(false);
-        return;
-    }
+    
+    if (board[r][c].isMine) { sfxBoom(); endGame(false); el.innerText = '💣'; return; }
+    
     sfxReveal();
     if (board[r][c].count > 0) {
         el.innerText = board[r][c].count;
@@ -439,34 +302,23 @@ function handleReveal(r, c) {
             for (let dc = -1; dc <= 1; dc++)
                 if (board[r+dr]?.[c+dc]) handleReveal(r+dr, c+dc);
     }
-    checkWin();
+    if (board.flat().filter(cell => !cell.isMine).every(cell => cell.revealed)) endGame(true);
 }
 
 function toggleFlag(r, c) {
     if (gameOver || board[r][c].revealed) return;
+    sfxFlag();
     board[r][c].flagged = !board[r][c].flagged;
     document.getElementById('grid').children[r * COLS + c].innerText = board[r][c].flagged ? '🚩' : '';
-    sfxFlag();
-    const flagsUsed = board.flat().filter(cell => cell.flagged).length;
-    document.getElementById('mine-count').innerText = TOTAL_MINES - flagsUsed;
-}
-
-function checkWin() {
-    if (board.flat().filter(cell => !cell.isMine).every(cell => cell.revealed)) endGame(true);
+    document.getElementById('mine-count').innerText = MINES - board.flat().filter(x => x.flagged).length;
 }
 
 function endGame(win) {
-    gameOver = true;
-    clearInterval(timerInterval);
-    if (win) {
-        sfxWin();
-    } else {
-        board.flat().forEach((cell, i) => {
-            if (cell.isMine) document.getElementById('grid').children[i].innerText = '💣';
-        });
-    }
+    gameOver = true; clearInterval(timerInt);
+    if (win) sfxWin();
+    else board.flat().forEach((cell, i) => { if (cell.isMine) document.getElementById('grid').children[i].innerText = '💣'; });
     document.getElementById('pop-title').innerText = win ? "Cleared! 🌻" : "Boom! 💥";
-    document.getElementById('pop-desc').innerText  = win ? `Time: ${timer}s` : "You hit a mine.";
+    document.getElementById('pop-desc').innerText = win ? `Time: ${timer}s` : "The garden was mined.";
     document.getElementById('overlay').style.display = 'flex';
 }
 
