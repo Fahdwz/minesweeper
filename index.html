@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Garden Minesweeper</title>
+    <title>Garden Minesweeper - EXPLOSIVE</title>
     <style>
         :root {
             --light-green: #aad751;
@@ -50,7 +50,6 @@
             border-radius: 15px;
             overflow: hidden;
             box-shadow: 0 20px 50px rgba(0,0,0,0.4);
-            background-color: var(--dark-green);
         }
         .cell {
             display: flex;
@@ -60,7 +59,6 @@
             font-size: 5.5vmin;
             font-weight: 900;
             user-select: none;
-            transition: background 0.1s ease;
         }
         .cell.light { background-color: var(--light-green); }
         .cell.dark  { background-color: var(--dark-green); }
@@ -75,39 +73,31 @@
             display: none;
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(0,0,0,0.6);
-            backdrop-filter: blur(5px);
+            background: rgba(0,0,0,0.7);
+            backdrop-filter: blur(8px);
             z-index: 100;
             justify-content: center;
             align-items: center;
         }
         .popup {
             background: white;
-            padding: 4vh 6vh;
-            border-radius: 25px;
+            padding: 5vh;
+            border-radius: 30px;
             text-align: center;
             box-shadow: 0 10px 30px rgba(0,0,0,0.5);
         }
         .btn {
-            padding: 1.5vh 4vh;
-            font-size: 3vmin;
+            padding: 2vh 5vh;
+            font-size: 3.5vmin;
             font-weight: bold;
             color: white;
             background-color: #6fb23d;
             border: none;
             border-radius: 50px;
             cursor: pointer;
-            box-shadow: 0 5px 0 #3a5e23;
-            transition: transform 0.1s;
+            box-shadow: 0 6px 0 #3a5e23;
         }
-        .btn:active { transform: translateY(3px); box-shadow: 0 2px 0 #3a5e23; }
-        .hint {
-            color: rgba(255,255,255,0.65);
-            font-size: 2.4vmin;
-            margin-top: 1.5vh;
-            text-align: center;
-            line-height: 1.6;
-        }
+        .btn:active { transform: translateY(3px); box-shadow: 0 3px 0 #3a5e23; }
     </style>
 </head>
 <body>
@@ -118,108 +108,115 @@
         <span>⏱️ <span id="timer">0</span></span>
     </div>
     <div id="grid"></div>
-    <button class="btn" style="margin-top:3vh;" onclick="initGame()">Restart</button>
-    <div class="hint">Desktop: Left-click reveal · Right-click flag<br>Mobile: Tap reveal · Long-press flag</div>
+    <button class="btn" style="margin-top:3vh;" onclick="initGame()">Restart Game</button>
 </div>
 
 <div id="overlay">
     <div class="popup">
-        <h2 id="pop-title" style="color:#4a752c; margin-top:0;">You Won!</h2>
-        <p id="pop-desc" style="color:#555; margin-bottom:3vh;">Time: 0 seconds</p>
-        <button class="btn" onclick="initGame()">Play Again</button>
+        <h2 id="pop-title" style="color:#4a752c; font-size: 8vmin; margin:0;">Boom!</h2>
+        <p id="pop-desc" style="color:#555; font-size: 4vmin; margin: 2vh 0 4vh 0;">Game Over</p>
+        <button class="btn" onclick="initGame()">Try Again</button>
     </div>
 </div>
 
 <script>
 /* ═══════════════════════════════════════════════════════════════
-   LOUD & CLEAR AUDIO ENGINE
+   HIGH-VOLUME AUDIO ENGINE
 ═══════════════════════════════════════════════════════════════ */
 let AC = null;
-function getAC() {
+
+function wakeAudio() {
     if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
     if (AC.state === 'suspended') AC.resume();
     return AC;
 }
 
-// Global master gain to prevent distortion but keep it loud
+// Global Master Gain
 let _master = null;
-function master() {
-    if (_master) return _master;
-    const ac = getAC();
-    _master = ac.createGain();
-    _master.gain.value = 0.8; // High volume
-    _master.connect(ac.destination);
+function getMaster() {
+    const ac = wakeAudio();
+    if (!_master) {
+        _master = ac.createGain();
+        _master.gain.value = 1.0; 
+        _master.connect(ac.destination);
+    }
     return _master;
 }
 
-function makeNoiseBuf(dur) {
-    const ac = getAC();
-    const len = Math.ceil(ac.sampleRate * dur);
-    const buf = ac.createBuffer(1, len, ac.sampleRate);
-    const d = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-    return buf;
-}
-
 function sfxBtn() {
-    const ac = getAC(); const now = ac.currentTime;
+    const ac = wakeAudio(); const now = ac.currentTime;
     const osc = ac.createOscillator(); const g = ac.createGain();
     osc.type = 'square';
-    osc.frequency.setValueAtTime(250, now);
-    osc.frequency.exponentialRampToValueAtTime(100, now + 0.04);
-    g.gain.setValueAtTime(0.3, now); // Boosted
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.04);
-    osc.connect(g); g.connect(master());
-    osc.start(now); osc.stop(now + 0.05);
+    osc.frequency.setValueAtTime(300, now);
+    osc.frequency.exponentialRampToValueAtTime(150, now + 0.05);
+    g.gain.setValueAtTime(0.4, now);
+    g.gain.linearRampToValueAtTime(0, now + 0.05);
+    osc.connect(g); g.connect(getMaster());
+    osc.start(); osc.stop(now + 0.06);
 }
 
 function sfxFlag() {
-    const ac = getAC(); const now = ac.currentTime;
-    // Wooden Thump
+    const ac = wakeAudio(); const now = ac.currentTime;
     const osc = ac.createOscillator(); const g = ac.createGain();
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(300, now);
-    osc.frequency.exponentialRampToValueAtTime(50, now + 0.08);
-    g.gain.setValueAtTime(0.6, now); // Loud
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-    osc.connect(g); g.connect(master());
-    osc.start(now); osc.stop(now + 0.1);
+    osc.frequency.setValueAtTime(200, now);
+    osc.frequency.linearRampToValueAtTime(50, now + 0.1);
+    g.gain.setValueAtTime(0.8, now); // Loudness boost
+    g.gain.linearRampToValueAtTime(0, now + 0.1);
+    osc.connect(g); g.connect(getMaster());
+    osc.start(); osc.stop(now + 0.11);
 }
 
 function sfxReveal() {
-    const ac = getAC(); const now = ac.currentTime;
+    const ac = wakeAudio(); const now = ac.currentTime;
     const osc = ac.createOscillator(); const g = ac.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(500, now);
-    osc.frequency.exponentialRampToValueAtTime(200, now + 0.08);
-    g.gain.setValueAtTime(0.2, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + 0.1);
-    osc.connect(g); g.connect(master());
-    osc.start(now); osc.stop(now + 0.12);
+    osc.frequency.setValueAtTime(600, now);
+    osc.frequency.exponentialRampToValueAtTime(300, now + 0.05);
+    g.gain.setValueAtTime(0.3, now);
+    g.gain.linearRampToValueAtTime(0, now + 0.05);
+    osc.connect(g); g.connect(getMaster());
+    osc.start(); osc.stop(now + 0.06);
 }
 
 function sfxBoom() {
-    const ac = getAC(); const now = ac.currentTime;
-    const sub = ac.createOscillator(); const subg = ac.createGain();
+    const ac = wakeAudio(); const now = ac.currentTime;
+    
+    // LAYER 1: The Deep Sub Thump
+    const sub = ac.createOscillator(); const subG = ac.createGain();
     sub.type = 'sine';
-    sub.frequency.setValueAtTime(100, now);
-    sub.frequency.exponentialRampToValueAtTime(20, now + 0.5);
-    subg.gain.setValueAtTime(0.8, now);
-    subg.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
-    sub.connect(subg); subg.connect(master());
-    sub.start(now); sub.stop(now + 0.7);
+    sub.frequency.setValueAtTime(150, now);
+    sub.frequency.exponentialRampToValueAtTime(20, now + 0.8);
+    subG.gain.setValueAtTime(1.5, now); // CRANKED VOLUME
+    subG.gain.linearRampToValueAtTime(0, now + 0.8);
+    sub.connect(subG); subG.connect(getMaster());
+    sub.start(); sub.stop(now + 0.8);
+
+    // LAYER 2: The Crunch (Noise)
+    const bufSize = ac.sampleRate * 0.5;
+    const buffer = ac.createBuffer(1, bufSize, ac.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    const noise = ac.createBufferSource();
+    noise.buffer = buffer;
+    const filter = ac.createBiquadFilter();
+    filter.type = 'lowpass'; filter.frequency.value = 400;
+    const noiseG = ac.createGain();
+    noiseG.gain.setValueAtTime(0.6, now);
+    noiseG.gain.linearRampToValueAtTime(0, now + 0.4);
+    noise.connect(filter); filter.connect(noiseG); noiseG.connect(getMaster());
+    noise.start(); noise.stop(now + 0.5);
 }
 
 function sfxWin() {
-    const ac = getAC(); const now = ac.currentTime;
-    [523.25, 659.25, 783.99, 1046.50].forEach((f, i) => {
-        const t = now + i * 0.12;
+    const ac = wakeAudio(); const now = ac.currentTime;
+    [523, 659, 784, 1046].forEach((f, i) => {
+        const t = now + i * 0.1;
         const o = ac.createOscillator(); const g = ac.createGain();
         o.type = 'sine'; o.frequency.value = f;
-        g.gain.setValueAtTime(0, t);
-        g.gain.linearRampToValueAtTime(0.3, t + 0.02);
-        g.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
-        o.connect(g); g.connect(master());
+        g.gain.setValueAtTime(0.4, t);
+        g.gain.exponentialRampToValueAtTime(0.01, t + 0.4);
+        o.connect(g); g.connect(getMaster());
         o.start(t); o.stop(t + 0.5);
     });
 }
@@ -231,7 +228,7 @@ const ROWS = 10, COLS = 10, MINES = 10;
 let board, gameOver, timer, timerInt, firstClick, longPress;
 
 function initGame() {
-    getAC(); sfxBtn();
+    wakeAudio(); sfxBtn();
     gameOver = false; timer = 0; firstClick = true;
     clearInterval(timerInt);
     document.getElementById('timer').innerText = '0';
@@ -248,12 +245,16 @@ function initGame() {
             const cell = document.createElement('div');
             cell.className = `cell ${(r + c) % 2 === 0 ? 'light' : 'dark'}`;
             cell.dataset.r = r; cell.dataset.c = c;
-            cell.addEventListener('click', (e) => handleReveal(+e.target.dataset.r, +e.target.dataset.c));
-            cell.addEventListener('contextmenu', (e) => { e.preventDefault(); toggleFlag(+e.target.dataset.r, +e.target.dataset.c); });
             
-            // Mobile Swipe/LongPress logic
+            cell.addEventListener('mousedown', (e) => {
+                wakeAudio();
+                if(e.button === 0) handleReveal(r, c);
+                if(e.button === 2) toggleFlag(r, c);
+            });
+            cell.addEventListener('contextmenu', e => e.preventDefault());
+
             cell.addEventListener('touchstart', (e) => { 
-                e.preventDefault(); 
+                e.preventDefault(); wakeAudio();
                 longPress = setTimeout(() => { longPress = null; toggleFlag(r, c); }, 400); 
             });
             cell.addEventListener('touchend', (e) => { 
@@ -291,7 +292,13 @@ function handleReveal(r, c) {
     const el = document.getElementById('grid').children[r * COLS + c];
     el.classList.add('revealed');
     
-    if (board[r][c].isMine) { sfxBoom(); endGame(false); el.innerText = '💣'; return; }
+    if (board[r][c].isMine) { 
+        sfxBoom(); 
+        endGame(false); 
+        el.innerText = '💣'; 
+        el.style.backgroundColor = '#ff4b2b';
+        return; 
+    }
     
     sfxReveal();
     if (board[r][c].count > 0) {
@@ -316,9 +323,11 @@ function toggleFlag(r, c) {
 function endGame(win) {
     gameOver = true; clearInterval(timerInt);
     if (win) sfxWin();
-    else board.flat().forEach((cell, i) => { if (cell.isMine) document.getElementById('grid').children[i].innerText = '💣'; });
+    else {
+        board.flat().forEach((cell, i) => { if (cell.isMine) document.getElementById('grid').children[i].innerText = '💣'; });
+    }
     document.getElementById('pop-title').innerText = win ? "Cleared! 🌻" : "Boom! 💥";
-    document.getElementById('pop-desc').innerText = win ? `Time: ${timer}s` : "The garden was mined.";
+    document.getElementById('pop-desc').innerText = win ? `Time: ${timer}s` : "Game Over!";
     document.getElementById('overlay').style.display = 'flex';
 }
 
